@@ -2,7 +2,7 @@ name: Auto Blogger Poster
 
 on:
   schedule:
-    - cron: "0 */3 * * *"   # har 5 ghante chalega
+    - cron: "0 */6 * * *"   # har 5 ghante chalega
   workflow_dispatch:        # manually run karne ka option bhi
   push:
     branches: [ "main" ]    # push hone par bhi chala
@@ -31,6 +31,6 @@ jobs:
           CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
           REFRESH_TOKEN: ${{ secrets.REFRESH_TOKEN }}
           BLOG_ID: ${{ secrets.BLOG_ID }}
-          GSMARENA_RSS: ${{ secrets.GSMARENA_RSS }}
+          GSMARENA_RSS: ${{ secrets.RSS_FEEDS_TO_PROCESS }}
           POST_INTERVAL_CRON: ${{ secrets.POST_INTERVAL_CRON }}
-          MODE: ${{ secrets.MODE || 'once' }}.          
+          MODE: ${{ secrets.MODE || 'once' }}          
