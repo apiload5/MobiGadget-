@@ -1,8 +1,8 @@
-name: Auto Blogger Poster
+name: MobiGadget 
 
 on:
   schedule:
-    - cron: "0 */6 * * *"   # har 5 ghante chalega
+    - cron: "0 */6 * * *"   # har 6 ghante chalega
   workflow_dispatch:        # manually run karne ka option bhi
   push:
     branches: [ "main" ]    # push hone par bhi chala
@@ -26,11 +26,20 @@ jobs:
       - name: Run app
         run: npm start
         env:
+          # 🔑 Required API keys and tokens
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CLIENT_ID: ${{ secrets.CLIENT_ID }}
           CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
           REFRESH_TOKEN: ${{ secrets.REFRESH_TOKEN }}
           BLOG_ID: ${{ secrets.BLOG_ID }}
-          GSMARENA_RSS: ${{ secrets.RSS_FEEDS_TO_PROCESS }}
+
+          # 📰 RSS feed URL (rename your secret to GSMARENA_RSS)
+          GSMARENA_RSS: ${{ secrets.GSMARENA_RSS }}
+
+          # ⚙️ Optional variables
           POST_INTERVAL_CRON: ${{ secrets.POST_INTERVAL_CRON }}
-          MODE: ${{ secrets.MODE || 'once' }}          
+          MODE: ${{ secrets.MODE || 'once' }}
+
+      - name: Print success message
+        run: echo "✅ MobiGadget workflow executed successfully!"
+        
