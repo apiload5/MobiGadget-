@@ -2,7 +2,7 @@ name: MobiGadget
 
 on:
   schedule:
-    - cron: "0 */6 * * *"   # har 6 ghante chalega
+    - cron: "0 */3 * * *"   # har 6 ghante chalega
   workflow_dispatch:        # manually run karne ka option bhi
   push:
     branches: [ "main" ]    # push hone par bhi chala
