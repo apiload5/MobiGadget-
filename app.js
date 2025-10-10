@@ -3,7 +3,8 @@
  * Features:
  * ✅ Auto fetch from GSMArena RSS
  * ✅ SEO rewrite (unique + keyword rich)
- * ✅ Adds meta, alt, title tags
+ * ✅ Adds SEO-optimized meta description and keywords (NEW)
+ * ✅ Adds SEO-optimized alt and title tags to image (NEW)
  * ✅ Replaces GSMArena logo with your logo (assets/logo.png)
  * ✅ Works on Replit + GitHub Actions
  */
@@ -106,7 +107,61 @@ async function overlayLogoOnImage(imageUrl) {
   }
 }
 
-// ========== AI HELPERS ==========
+// ========== AI HELPER FOR ALT TEXT (TOKEN OPTIMIZED) ==========
+async function generateImageAlt(title, content) {
+  const prompt = `Based on the following article title and content snippet, generate one short, highly descriptive, and keyword-rich alt text (max 12 words) for the main image. Only return the alt text itself, no extra words or quotes.
+
+Title: ${title}
+Content Snippet: ${content.slice(0, 500).replace(/<[^>]+>/g, '')}`;
+
+  try {
+    const res = await openai.chat.completions.create({
+      model: OPENAI_MODEL,
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 20
+    });
+    let altText = res.choices?.[0]?.message?.content || title;
+    // Clean up response
+    altText = altText.replace(/['"]/g, '').trim();
+    return altText.length > 5 ? altText : title;
+  } catch (e) {
+    log('OpenAI Alt Text error:', e.message);
+    return title;
+  }
+}
+
+// ========== AI HELPER FOR META TAGS (TOKEN OPTIMIZED) ==========
+async function generateMeta({ title, snippet, content }) {
+  // Token bachanay ke liye content ko 500 chars tak limit karo.
+  const contentForAI = snippet || content.slice(0, 500).replace(/<[^>]+>/g, '');
+  const prompt = `Based on the following title and content, generate two things for SEO:
+1. An SEO-optimized meta description (max 160 characters).
+2. A comma-separated list of 5-7 most relevant keywords.
+
+Output only a JSON object like this: {"description": "...", "keywords": "..."}`;
+
+  try {
+    const res = await openai.chat.completions.create({
+      model: OPENAI_MODEL,
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 150,
+      response_format: { "type": "json_object" }
+    });
+    
+    let result = JSON.parse(res.choices?.[0]?.message?.content || '{}');
+    const desc = result.description?.replace(/["']/g, '').trim() || contentForAI.slice(0, 150);
+    const keywords = result.keywords || title.split(' ').slice(0, 8).join(', ');
+
+    return `<meta name="description" content="${desc.replace(/["']/g, '')}">\n<meta name="keywords" content="${keywords}">`;
+
+  } catch (e) {
+    log('OpenAI Meta error (using fallback):', e.message);
+    const fallbackDesc = contentForAI.slice(0, 160).replace(/<[^>]+>/g, '');
+    const fallbackKeywords = title.split(' ').slice(0, 8).join(', ');
+    return `<meta name="description" content="${fallbackDesc.replace(/["']/g, '')}">\n<meta name="keywords" content="${fallbackKeywords}">`;
+  }
+}
+
 async function rewriteWithOpenAI({ title, snippet, content }) {
   const prompt = `Rewrite this news article into a 100% unique, SEO-optimized English version for a tech blog.
 - Add relevant subheadings (H2, H3)
@@ -135,42 +190,48 @@ Content: ${content}`;
   }
 }
 
-async function generateMeta({ title, snippet, content }) {
-  const metaDesc = snippet || content.slice(0, 160).replace(/<[^>]+>/g, '');
-  return `<meta name="description" content="${metaDesc}">\n<meta name="keywords" content="${title.split(' ').slice(0, 8).join(', ')}">`;
-}
-
-// ========== MAIN POSTING ==========
+// ========== MAIN POSTING (BUG-FIXED & TOKEN-OPTIMIZED) ==========
 async function processOnce() {
   try {
     const feed = await parser.parseURL(GSMARENA_RSS);
     if (!feed?.items?.length) return log('No feed items found.');
 
-    const items = feed.items.slice(0, MAX_ITEMS_PER_RUN);
-    for (const item of items) {
+    // 🐛 BUG FIX: Pehle items ko filter karo jo post nahi hue hain, phir slice karo.
+    const itemsToProcess = feed.items.filter(item => {
       const guid = item.guid || item.link;
-      if (hasBeenPosted(guid)) continue;
+      return !hasBeenPosted(guid);
+    }).slice(0, MAX_ITEMS_PER_RUN);
+    
+    if (itemsToProcess.length === 0) return log('No new items to post.');
 
+    for (const item of itemsToProcess) {
+      const guid = item.guid || item.link;
       const title = item.title;
       const snippet = item.contentSnippet || '';
       let content = item['content:encoded'] || item.content || snippet;
       let imageUrl = (content.match(/<img[^>]+src=["']([^"']+)["']/i) || [])[1];
       content = content.replace(/<img[^>]*>/gi, '');
       
+      if (!imageUrl) {
+        log(`⚠️ Skipping: No image found for ${title}`);
+        continue;
+      }
 
-      if (!imageUrl) continue;
-
-      // 🖼 Apply logo overlay
-      imageUrl = await overlayLogoOnImage(imageUrl);
-
-      // ✍️ Rewrite article
-      const rewritten = await rewriteWithOpenAI({ title, snippet, content });
+      // ✨ TOKEN OPTIMIZATION: Meta tags aur Alt text ko original content se generate karo.
+      // ✍️ AI ko sirf zaruri chizein bhejo taake token bachein.
       const meta = await generateMeta({ title, snippet, content });
+      const imageAlt = await generateImageAlt(title, snippet || content); // Alt text ke liye rewritten content ki zarurat nahi.
+      
+      // 🖼 Apply logo overlay
+      const brandedImageUrl = await overlayLogoOnImage(imageUrl);
 
+      // ✍️ Rewrite article (Yeh step abhi bhi zayada token lega, lekin yeh zaroori hai).
+      const rewritten = await rewriteWithOpenAI({ title, snippet, content });
+      
       const finalHtml = `
 ${meta}
 <h1>${title}</h1>
-<p><img src="${imageUrl}" alt="${title}" title="${title}" style="max-width:100%;height:auto"/></p>
+<p><img src="${brandedImageUrl}" alt="${imageAlt}" title="${imageAlt}" style="max-width:100%;height:auto"/></p>
 ${rewritten}`;
 
       const res = await blogger.posts.insert({
@@ -196,6 +257,7 @@ async function start() {
   } else {
     await processOnce();
     cron.schedule(POST_INTERVAL_CRON, processOnce);
+    log(`⏰ Cron scheduled: Running every ${POST_INTERVAL_CRON}`);
   }
 }
 
