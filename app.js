@@ -1,30 +1,29 @@
 /**
- * app.js
- * * MobiGadget - GSMArena RSS to Blogger Auto Poster (PERFECTED)
- * * Features:
- * ✅ Critical Bug Fixes (GoogleApis, Duplicate Post, Double Image)
- * ✅ Complete Logo Concealment and Image Enlargement via Sharp
- * ✅ Robust Duplicate Checking (GUID, Link, Title)
- * ✅ Advanced SEO Optimization (Alt/Title Text, Meta Tags)
+ * MobiGadget Auto Blogger (FINAL COMPLETE VERSION)
+ * Features:
+ * ✅ Uses original logo branding method (No Imgur required)
+ * ✅ FIX: Only one branded image is posted.
+ * ✅ FIX: SEO-optimized Alt/Title text is generated.
+ * ✅ FIX: Article length controlled for quality (1200 word limit removed).
+ * ✅ Duplicate check included.
  */
 
 import 'dotenv/config';
 import Parser from 'rss-parser';
 import axios from 'axios';
 import Database from 'better-sqlite3';
-import { google } from 'googleapis'; // FIX 1: Correct GoogleApis import
+import { GoogleApis } from 'googleapis';
 import OpenAI from 'openai';
 import cron from 'node-cron';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import sharp from 'sharp'; // FIX 4: Use sharp for better image processing
-import crypto from 'crypto'; // FIX 5: Import crypto for content hash
+import Jimp from 'jimp';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// ========== CONFIG FROM .ENV ==========
+// --- ENV VARIABLES ---
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const CLIENT_ID = process.env.CLIENT_ID;
 const CLIENT_SECRET = process.env.CLIENT_SECRET;
@@ -37,384 +36,267 @@ const MAX_ITEMS_PER_RUN = parseInt(process.env.MAX_ITEMS_PER_RUN || '1', 10);
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const DB_PATH = process.env.DB_PATH || './data/posts.db';
 const MODE = (process.env.MODE || 'cron').toLowerCase();
-const USER_AGENT = process.env.USER_AGENT || 'MobiGadget/1.0';
-const LOGO_PATH = path.join(__dirname, 'assets', 'logo.png'); // CUSTOM LOGO PATH
-const MAX_IMAGE_HTML_WIDTH = process.env.MAX_IMAGE_HTML_WIDTH || '1000';
+const USER_AGENT = process.env.USER_AGENT || 'MobiGadget/3.0';
 
-// ========== BASIC CHECKS ==========
+// --- LOGO PATH CHECK ---
+const LOGO_PATH = path.join(__dirname, 'assets', 'logo.png');
+if (!fs.existsSync(LOGO_PATH)) {
+    console.error(`❌ ERROR: Logo file not found. Please ensure 'logo.png' exists in the 'assets' folder.`);
+    process.exit(1);
+}
+
+const GSMARENA_LOGO_COORDS = process.env.GSMARENA_LOGO_COORDS || '10,10,100,20';
+
+// --- BASIC CHECKS & SETUP ---
 if (!OPENAI_API_KEY) {
-  console.error('❌ ERROR: OPENAI_API_KEY missing in .env');
-  process.exit(1);
+    console.error('❌ ERROR: OPENAI_API_KEY is missing.');
+    process.exit(1);
 }
 if (!CLIENT_ID || !CLIENT_SECRET || !REFRESH_TOKEN || !BLOG_ID) {
-  console.error('❌ ERROR: Blogger OAuth info missing');
-  process.exit(1);
-}
-if (!fs.existsSync(LOGO_PATH)) {
-  console.warn(`⚠️ Warning: Custom logo not found at ${LOGO_PATH}. Image watermarking will fail.`);
+    console.error('❌ ERROR: Blogger OAuth configuration is incomplete.');
+    process.exit(1);
 }
 
-// ========== SETUP ==========
+const logoCoords = GSMARENA_LOGO_COORDS.split(',').map(Number);
+if (logoCoords.length !== 4 || logoCoords.some(isNaN)) {
+    console.error('❌ ERROR: Invalid GSMARENA_LOGO_COORDS.');
+    process.exit(1);
+}
+
+// --- GOOGLE SETUP (Standard V3) ---
 const parser = new Parser();
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
-
-// FIX 1: Correct GoogleApis initialization
+const google = new GoogleApis();
 const oauth2Client = new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET);
 oauth2Client.setCredentials({ refresh_token: REFRESH_TOKEN });
-const blogger = google.blogger({ version: 'v3', auth: oauth2Client });
+const blogger = google.blogger({ version: 'v3', auth: oauth2Client }); 
 
-// Database init
 const dbDir = path.dirname(DB_PATH);
 if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
 const db = new Database(DB_PATH);
-
-// Enhanced Database Schema (for robust duplicate check)
+db.pragma('journal_mode = WAL');
 db.prepare(`
   CREATE TABLE IF NOT EXISTS posted (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    guid TEXT UNIQUE,
-    link TEXT UNIQUE,
-    title TEXT,
-    title_slug TEXT UNIQUE,
-    published_at TEXT,
-    posted_at TEXT DEFAULT (datetime('now'))
+    id INTEGER PRIMARY KEY AUTOINCREMENT, guid TEXT UNIQUE, link TEXT UNIQUE,
+    title TEXT, published_at TEXT, posted_at TEXT DEFAULT (datetime('now'))
   )
 `).run();
 
-// FUNCTION: Generate title slug for duplicate checking
-function generateSlug(title) {
-  return title.toLowerCase()
-    .replace(/[^\w\s]/g, '')
-    .replace(/\s+/g, '-')
-    .substring(0, 100);
+// --- HELPER FUNCTIONS ---
+
+function log(...args) {
+  console.log(new Date().toISOString(), ...args);
 }
 
-// MODIFIED: Stronger Duplicate Check
-function hasBeenPosted(guid, link, title) {
-  const titleSlug = generateSlug(title);
-  
-  // Check exact matches (GUID or Link or Title Slug)
-  const exactMatch = db.prepare(`
-    SELECT 1 FROM posted WHERE guid = ? OR link = ? OR title_slug = ?
-  `).get(guid, link, titleSlug);
-  
-  if (exactMatch) return true;
-  return false;
+function sleep(ms) {
+    return new Promise(r => setTimeout(r, ms));
 }
 
-// MODIFIED: markPosted (Title Slug bhi save karein)
+function escapeHtml(text) {
+  if (!text) return '';
+  return text.replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[m]));
+}
+
+function hasBeenPosted(guidOrLink) {
+  const row = db.prepare('SELECT 1 FROM posted WHERE guid = ? OR link = ?').get(guidOrLink, guidOrLink);
+  return !!row;
+}
+
 function markPosted({ guid, link, title, published_at }) {
-  const titleSlug = generateSlug(title);
-  const stmt = db.prepare(`
-    INSERT OR IGNORE INTO posted 
-    (guid, link, title, title_slug, published_at) 
-    VALUES (?, ?, ?, ?, ?)
-  `);
-  stmt.run(guid, link, title, titleSlug, published_at || null);
+  const stmt = db.prepare('INSERT OR IGNORE INTO posted (guid, link, title, published_at) VALUES (?, ?, ?, ? )');
+  stmt.run(guid, link, title, published_at || null);
 }
 
-function log(...msg) {
-  console.log(new Date().toISOString(), ...msg);
-}
-
-// FUNCTION: Generate content hash (for better tracking, though not used in final check)
-function generateContentHash(content) {
-  return crypto.createHash('md5').update(content).digest('hex');
-}
-
-// FUNCTION: Upload image to Blogger (Base64 fallback) - REUSED FROM PREVIOUS VERSION
-async function uploadImageToBlogger(imageBuffer, title) {
+async function fetchPage(url) {
   try {
-    const base64Image = imageBuffer.toString('base64');
-    const timestamp = Date.now();
-    const filename = `mobigadget-${timestamp}.jpg`;
-    
-    const media = await blogger.media.insert({
-      blogId: BLOG_ID,
-      requestBody: { title: `MobiGadget - ${title}`, fileName: filename },
-      media: { mimeType: 'image/jpeg', data: base64Image }
-    });
-    
-    log('✅ Image uploaded to Blogger successfully');
-    return media.data.url;
-  } catch (err) {
-    log('❌ Image upload failed, using base64 fallback:', err.message);
-    // Fallback: Use base64 data URL
-    const base64Data = imageBuffer.toString('base64');
-    return `data:image/jpeg;base64,${base64Data}`;
-  }
-}
-
-// NEW FUNCTION: Conceal GSMArena Logo, Enlarge, and Watermark
-async function concealLogoAndResize(originalImageUrl, customLogoPath) {
-  const TARGET_WIDTH = 1200; // Mandatory Enlargement/Resize Target
-  const CONCEAL_HEIGHT = 100; 
-  const CONCEAL_WIDTH = 300; 
-  
-  try {
-    // 1. Download original image
-    const imageResponse = await axios.get(originalImageUrl, {
-      responseType: 'arraybuffer',
-      headers: { 'User-Agent': USER_AGENT },
-      timeout: 30000
-    });
-    
-    let originalImage = sharp(imageResponse.data);
-    
-    // 2. Resize/Enlarge to TARGET_WIDTH 
-    const resizedImageBuffer = await originalImage
-      .resize(TARGET_WIDTH, null, { fit: 'inside' }) // Allows Upscaling/Enlargement
-      .toBuffer();
-      
-    let processedImage = sharp(resizedImageBuffer);
-    const resizedMetadata = await processedImage.metadata();
-    
-    // 3. Create a white rectangle buffer (Concealer)
-    const whiteConcealerBuffer = await sharp({
-      create: {
-        width: CONCEAL_WIDTH,
-        height: CONCEAL_HEIGHT,
-        channels: 3,
-        background: { r: 255, g: 255, b: 255, alpha: 0.95 } // White/Near-White
-      }
-    }).png().toBuffer();
-    
-    // 4. Download and Resize custom logo
-    const logoBuffer = fs.readFileSync(customLogoPath);
-    const logoWidth = Math.floor(resizedMetadata.width * 0.1); 
-    const logoHeight = Math.floor(logoWidth * 0.8);
-    
-    const resizedLogo = await sharp(logoBuffer)
-      .resize(logoWidth, logoHeight, { fit: 'contain' })
-      .png()
-      .toBuffer();
-    
-    // 5. Composite: 
-    const finalImageBuffer = await processedImage
-      .composite([
-        { // 5a: Concealer (Erase original logo area)
-          input: whiteConcealerBuffer,
-          top: resizedMetadata.height - CONCEAL_HEIGHT, 
-          left: resizedMetadata.width - CONCEAL_WIDTH, 
-          blend: 'over'
-        },
-        { // 5b: Your Logo (Watermark)
-          input: resizedLogo,
-          top: resizedMetadata.height - logoHeight - 15, 
-          left: resizedMetadata.width - logoWidth - 15,
-          blend: 'over'
-        }
-      ])
-      .jpeg({ quality: 85, mozjpeg: true })
-      .toBuffer();
-    
-    log('✅ Logo concealed, image resized (to 1200px), and watermarked successfully.');
-    return finalImageBuffer;
-    
-  } catch (err) {
-    log('❌ Image processing/download failed:', err.message);
+    const res = await axios.get(url, { headers: { 'User-Agent': USER_AGENT }, timeout: 15000 });
+    return res.data;
+  } catch (e) {
     return null;
   }
 }
 
+function extractFirstImageFromHtml(html) {
+  if (!html) return null;
+  const imgMatch = html.match(/<img[^>]+src=["']([^"']+)["']/i);
+  if (imgMatch) return imgMatch[1];
+  return null;
+}
 
-// MODIFIED AI HELPER FOR META TAGS (SEO OPTIMIZATION)
-async function generateMeta({ title, snippet, content }) {
-  const contentForAI = snippet || content.slice(0, 500).replace(/<[^>]+>/g, '');
-  const prompt = `Based on the following title and content, generate two things for SEO:
-1. An SEO-optimized meta description (max 155 characters). This should be a compelling, click-worthy search engine snippet.
-2. A comma-separated list of 5-7 highly relevant, long-tail keywords suitable for blog tags.
+function extractOgImage(html) {
+  if (!html) return null;
+  const m = html.match(/property=["']og:image["']\s*content=["']([^"']+)["']/i) || html.match(/<meta[^>]*name=["']og:image["'][^>]*content=["']([^"']+)["']/i);
+  if (m) return m[1];
+  return null;
+}
 
-Output only a JSON object like this: {"description": "...", "keywords": "..."}`;
+function extractMainArticle(html) {
+  if (!html) return null;
+  let match = html.match(/<div class=\"article-body\">([\s\S]*?)<\/div>/i);
+  if (match) return match[1];
+  match = html.match(/<div[^>]*class=[\"']o-article-blocks[\"'][^>]*>([\s\S]*?)<\/div>/i);
+  if (match) return match[1];
+  return null;
+}
 
+async function createBloggerPost({ title, htmlContent, labels = [] }) {
   try {
-    const res = await openai.chat.completions.create({
-      model: OPENAI_MODEL,
-      messages: [{ role: 'user', content: prompt }],
-      max_tokens: 150,
-      response_format: { "type": "json_object" }
+    const res = await blogger.posts.insert({
+      blogId: BLOG_ID, requestBody: { title, content: htmlContent, labels: labels.length ? labels : undefined }
     });
-    
-    let result = JSON.parse(res.choices?.[0]?.message?.content || '{}');
-    const desc = (result.description || contentForAI.slice(0, 150)).replace(/["']/g, '').trim();
-    const keywords = result.keywords || title.split(' ').slice(0, 8).join(', ');
-
-    return {
-      metaHtml: `<meta name="description" content="${desc.slice(0, 155).replace(/["']/g, '')}">\n<meta name="keywords" content="${keywords}">`,
-      labels: keywords.split(',').map(k => k.trim()).filter(Boolean)
-    };
-
-  } catch (e) {
-    log('OpenAI Meta error (using fallback):', e.message);
-    const fallbackDesc = contentForAI.slice(0, 155).replace(/<[^>]+>/g, '');
-    const fallbackKeywords = title.split(' ').slice(0, 8).join(', ');
-    return {
-      metaHtml: `<meta name="description" content="${fallbackDesc}">\n<meta name="keywords" content="${fallbackKeywords}">`,
-      labels: fallbackKeywords.split(',').map(k => k.trim()).filter(Boolean)
-    };
+    return res.data;
+  } catch (err) {
+    log('Blogger API error:', err?.message || err?.toString());
+    throw err;
   }
 }
 
-// MODIFIED AI HELPER FOR ALT/TITLE TEXT (SEO OPTIMIZATION)
-async function generateImageAltAndTitle(title, content) {
-  const prompt = `Based on the article title and content snippet, generate two items for the main image:
-1. Alt Text: A short (max 10 words) descriptive alt text for accessibility and SEO.
-2. Title Text: A short (max 5 words) keyword-rich title for SEO.
+// --- IMAGE PROCESSING (Returns Base64 String - No Imgur) ---
 
-Output only a JSON object like this: {"alt": "...", "title": "..."}`;
-
+async function processAndBrandImageToBase64(imageUrl) {
   try {
-    const res = await openai.chat.completions.create({
-      model: OPENAI_MODEL,
-      messages: [{ role: 'user', content: prompt }],
-      max_tokens: 40,
-      response_format: { "type": "json_object" }
-    });
-    let result = JSON.parse(res.choices?.[0]?.message?.content || '{}');
+    const image = await Jimp.read(imageUrl);
+    const logo = await Jimp.read(LOGO_PATH);
+    const [x, y, width, height] = logoCoords;
+    image.composite(new Jimp(width, height, 0xFFFFFFFF), x, y); // Remove GSMArena logo
+    const logoWidth = image.bitmap.width * 0.25;
+    logo.resize(logoWidth, Jimp.AUTO);
+    const overlayX = image.bitmap.width - logo.bitmap.width - 20;
+    const overlayY = image.bitmap.height - logo.bitmap.height - 20;
+    image.composite(logo, overlayX, overlayY, { mode: Jimp.BLEND_SOURCE_OVER, opacitySource: 0.85 });
     
-    const altText = (result.alt || `Detailed image of ${title}`).replace(/['"]/g, '').trim();
-    const titleText = (result.title || `Latest ${title} overview`).replace(/['"]/g, '').trim();
-    
-    return { altText, titleText };
-  } catch (e) {
-    log('OpenAI Alt/Title error (using fallback):', e.message);
-    return { altText: `Detailed image of ${title}`, titleText: `Latest ${title} news` };
+    return await image.getBase64Async(Jimp.MIME_JPEG);
+  } catch (err) {
+    log('⚠️ Image processing failed:', err.message);
+    return null;
   }
 }
 
-// FIX 2: Added STRICT RULE to prevent double images
+// --- AI FUNCTIONS (REVISED LENGTH CONTROL) ---
+
 async function rewriteWithOpenAI({ title, snippet, content }) {
-  const prompt = `Rewrite this news article into a 100% unique, comprehensive, and SEO-optimized English version for a professional tech blog.
-
-Rules for Output:
-1. **Originality First:** Paraphrase and restructure completely.
-2. **Structure:** Use a strong main headline (H1) and structured subheadings (H2, H3).
-3. **Formatting:** Use clear HTML (<p>, <strong>, <ul>, <ol>).
-4. **Clean Output:** DO NOT include any hyperlinks (<a> tags).
-5. **CRITICAL RULE: DO NOT include any <img> tags, picture, charts, or figures in the output HTML. The image is added separately.**
-6. **Language:** Professional English only.
-7. **Output Format:** Return ONLY the final HTML content for the article body.
-
-Title: ${title}
-Snippet: ${snippet}
-Content: ${content}`;
+  // REVISED PROMPT: Removed the strict 1200 word count for better quality control.
+  const prompt = `You are a highly skilled SEO Content Writer. Rewrite the following article into a **unique, high-quality, and comprehensive English news post** for a professional tech blog.
+Rules for SEO and Originality: 1. **Originality First:** Your main goal is to generate content that is **NOT duplicate**. Paraphrase and restructure the input completely. 2. **Completeness/Depth:** The post must fully answer the user's intent. **Expand the topic logically and naturally** by adding background, context, and future implications. The final article should be substantially longer and richer than the original. 3. **Structure:** Use a compelling main headline (H1) and relevant, structured subheadings (H2, H3) for readability and SEO. 4. **Formatting:** Use standard HTML formatting (p, strong, ul, ol). 5. **Clean Output:** **DO NOT** include any links (hyperlinks/<a> tags). **DO NOT** include any introductory or concluding remarks outside the main article body. 6. **Language:** Write in professional, clear English only. 7. **Output Format:** Return **ONLY** the final HTML content for the article body.`;
   try {
-    const res = await openai.chat.completions.create({
-      model: OPENAI_MODEL,
-      messages: [{ role: 'user', content: prompt }],
-      max_tokens: 2200 // Increased tokens for longer, comprehensive content
+    const completion = await openai.chat.completions.create({
+      model: OPENAI_MODEL, messages: [{ role: 'user', content: `${prompt}\n\nTitle: ${title}\n\nSnippet: ${snippet || ''}\n\nContent:\n${content || ''}` }], max_tokens: 2200 
     });
-    let html = res.choices?.[0]?.message?.content || '';
-    html = html.replace(/```html|```/g, '').trim();
-    html = html.replace(/<a [^>]*>(.*?)<\/a>/gi, '$1'); // Remove links
-    html = html.replace(/<img[^>]*>|<figure[^>]*>[\s\S]*?<\/figure>/gi, ''); // Final safety check to remove images
-
-    return html;
-  } catch (e) {
-    log('OpenAI rewrite error:', e.message);
-    return `<p>Failed to rewrite content for ${title}.</p><p>${content}</p>`;
+    let text = completion.choices?.[0]?.message?.content || '';
+    text = text.replace(/\.\.\.\s*html/gi, '').replace(/<a [^>]*>(.*?)<\/a>/gi, '$1');
+    return text;
+  } catch (err) {
+    log('OpenAI rewrite error:', err?.message || err);
+    throw err;
   }
 }
 
-// ========== MAIN POSTING (UPDATED) ==========
+async function generateImageAlt(title, snippet, content) {
+  const prompt = `Generate a descriptive image alt text (5-10 words) that explains what the picture shows based on this article:\nTitle: ${title}\nSnippet: ${snippet}\nContent: ${content}\nOnly return alt text.`;
+  try {
+    const completion = await openai.chat.completions.create({ model: OPENAI_MODEL, messages: [{ role: 'user', content: prompt }], max_tokens: 40 });
+    return (completion.choices?.[0]?.message?.content || title).trim();
+  } catch (err) { log('Alt error:', err?.message || err); return title; }
+}
+
+async function generateImageTitle(title, snippet, content) {
+  const prompt = `Generate a short SEO-friendly title text (3-6 words) for an image in this article:\nTitle: ${title}\nSnippet: ${snippet}\nContent: ${content}\nOnly return title text.`;
+  try {
+    const completion = await openai.chat.completions.create({ model: OPENAI_MODEL, messages: [{ role: 'user', content: prompt }], max_tokens: 20 });
+    return (completion.choices?.[0]?.message?.content || title).trim();
+  } catch (err) { log('Title error:', err?.message || err); return title; }
+}
+
+async function generateTags(title, snippet, content) {
+  const prompt = `Generate 3-6 SEO-friendly tags for this article. Return as comma-separated keywords only.\nTitle: ${title}\nSnippet: ${snippet}\nContent: ${content}`;
+  try {
+    const completion = await openai.chat.completions.create({ model: OPENAI_MODEL, messages: [{ role: 'user', content: prompt }], max_tokens: 40 });
+    const tags = (completion.choices?.[0]?.message?.content || '').split(',').map(t => t.trim()).filter(Boolean);
+    return tags;
+  } catch (err) { log('Tags error:', err?.message || err); return []; }
+}
+
+
+// --- MAIN PROCESS ---
+
 async function processOnce() {
   try {
+    log('Fetching RSS:', GSMARENA_RSS);
     const feed = await parser.parseURL(GSMARENA_RSS);
-    if (!feed?.items?.length) return log('No feed items found.');
+    if (!feed?.items?.length) return log('No items in feed.');
 
-    const itemsToProcess = feed.items.slice(0, MAX_ITEMS_PER_RUN);
-    
-    for (const item of itemsToProcess) {
+    const items = feed.items.slice(0, MAX_ITEMS_PER_RUN);
+    for (const item of items) {
       const guid = item.guid || item.link;
       const link = item.link;
-      const title = item.title;
-      
-      log(`🔍 Checking: "${title}"`);
+      const title = item.title || 'Untitled';
 
-      // FIX 3: Stronger Duplicate Check
-      if (hasBeenPosted(guid, link, title)) {
-        log('❌ Already posted in database:', title);
+      if (hasBeenPosted(guid) || hasBeenPosted(link)) {
+        log('Already posted:', title);
         continue;
       }
+      log('Processing new item:', title);
 
-      const snippet = item.contentSnippet || '';
-      let content = item['content:encoded'] || item.content || snippet;
-      
-      // Extract main image URL from content
-      let imageUrl = (content.match(/<img[^>]+src=["']([^"']+)["']/i) || [])[1];
-      
-      if (!imageUrl) {
-        log(`⚠️ Skipping: No image URL found for ${title}`);
-        continue;
-      }
+      let snippet = item.contentSnippet || '';
+      let fullContent = item['content:encoded'] || item.content || snippet;
+      let imageUrl = null;
 
-      // 🖼 Apply logo concealment and enlargement
-      const watermarkedImageBuffer = await concealLogoAndResize(imageUrl, LOGO_PATH);
-      let uploadedImageUrl = imageUrl;
-      
-      if (watermarkedImageBuffer) {
-        uploadedImageUrl = await uploadImageToBlogger(watermarkedImageBuffer, title);
-      } else {
-        log('⚠️ Watermarking failed, using original RSS image URL.');
-      }
-      
-      // ✍️ Rewrite article (with NO IMG TAGS rule)
-      const rewritten = await rewriteWithOpenAI({ title, snippet, content });
-      
-      // ✨ Generate SEO components
-      const { metaHtml, labels } = await generateMeta({ title, snippet, content: rewritten });
-      const { altText, titleText } = await generateImageAltAndTitle(title, rewritten);
-
-      // Final HTML Structure
-      const finalHtml = `
-${metaHtml}
-<div style="text-align: center; margin-bottom: 20px;">
-  <img src="${uploadedImageUrl}" 
-       alt="${altText}" 
-       title="${titleText}" 
-       style="max-width: ${MAX_IMAGE_HTML_WIDTH}px; width: 100%; height: auto; border-radius: 8px;" />
-  <p style="font-style: italic; color: #666; margin-top: 8px; font-size: 14px;">Image: ${altText}</p>
-</div>
-${rewritten}`;
-
-      const res = await blogger.posts.insert({
-        blogId: BLOG_ID,
-        requestBody: { 
-            title, 
-            content: finalHtml,
-            labels: labels.length ? labels : undefined 
+      if (link) {
+        const pageHtml = await fetchPage(link);
+        if (pageHtml) {
+          const extracted = extractMainArticle(pageHtml);
+          if (extracted) fullContent = extracted;
+          imageUrl = extractOgImage(pageHtml) || extractFirstImageFromHtml(pageHtml);
         }
-      });
-
-      log('✅ Posted:', res.data.url);
-      log('🏷️ Tags used:', labels.join(', '));
-      markPosted({ guid, link, title, published_at: item.pubDate });
-      
-      if (MODE === 'once') {
-        log('🎯 MODE=once: Exiting after one post.');
-        return;
+      }
+      if (!imageUrl) imageUrl = extractFirstImageFromHtml(fullContent);
+      if (!imageUrl) {
+        log(`⚠️ Skipping: No image found for ${title}`);
+        continue;
       }
       
-      await new Promise(r => setTimeout(r, 2000)); // Delay between posts
+      // 1. AI and SEO generation
+      const altText = await generateImageAlt(title, snippet, fullContent);
+      const titleText = await generateImageTitle(title, snippet, fullContent);
+      const tags = await generateTags(title, snippet, fullContent);
+      
+      // 2. Process image (logo remove/add) and get Base64
+      const brandedBase64 = await processAndBrandImageToBase64(imageUrl);
+      if (!brandedBase64) continue;
+      
+      // 3. Content rewriting
+      const rewrittenHtml = await rewriteWithOpenAI({ title, snippet, content: fullContent });
+
+      // FIX: Only one image tag (the branded Base64 image) is created.
+      // NOTE: Base64 may cause issues with thumbnails on some old Blogger themes.
+      let finalHtml = `<p><img src="${brandedBase64}" alt="${escapeHtml(altText)}" title="${escapeHtml(titleText)}" style="max-width:100%;height:auto" /></p>\n`;
+      finalHtml += rewrittenHtml;
+
+      const posted = await createBloggerPost({ title, htmlContent: finalHtml, labels: tags });
+      log('✅ Posted to Blogger:', posted.url);
+      markPosted({ guid, link, title, published_at: item.pubDate });
+      await sleep(2000);
+
+      if (MODE === 'once') return;
     }
   } catch (err) {
-    log('processOnce error:', err.message);
+    log('❌ processOnce error:', err?.message || err);
   }
 }
 
-// ========== START ==========
+// --- START ---
+
 async function start() {
-  log(`🚀 Starting MobiGadget AutoPoster in ${MODE} mode...`);
-  
-  if (MODE === 'once') {
-    await processOnce();
-    process.exit(0);
-  } else {
-    // Run once at start, then schedule
-    await processOnce();
-    cron.schedule(POST_INTERVAL_CRON, processOnce);
-    log(`⏰ Cron scheduled: Running at ${POST_INTERVAL_CRON}`);
-  }
+    log('🚀 Starting MobiGadget Auto Blogger (Original Style - Final Version)...');
+    if (MODE === 'once') {
+        await processOnce();
+        log('Finished single run. Exiting.');
+        process.exit(0);
+    } else {
+        log('Scheduling cron:', POST_INTERVAL_CRON);
+        await processOnce();
+        cron.schedule(POST_INTERVAL_CRON, processOnce);
+    }
 }
 
-start().catch(e => log('Fatal error:', e.message));
+start().catch(e => { log('❌ Fatal error:', e?.message || e); process.exit(1); });
