@@ -1,7 +1,28 @@
 {
   "name": "MobiGadget",
   "version": "1.0.3",
+  "description": "Automated RSS to Blogger poster with AI content rewriting and logo replacement",
   "type": "module",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "dev": "node --watch app.js",
+    "test": "echo \"No tests specified\" && exit 0",
+    "setup": "npm install && mkdir -p assets data",
+    "install-sharp": "npm install --platform=linux --arch=x64 sharp"
+  },
+  "keywords": [
+    "blogger",
+    "rss",
+    "automation",
+    "openai",
+    "content",
+    "seo",
+    "gsmarena",
+    "autoposter"
+  ],
+  "author": "MobiGadget",
+  "license": "MIT",
   "dependencies": {
     "axios": "^1.6.0",
     "better-sqlite3": "^11.0.0",
@@ -12,8 +33,16 @@
     "rss-parser": "^3.13.0",
     "sharp": "^0.33.4"
   },
-  "scripts": {
-    "start": "node app.js",
-    "install-sharp": "npm install --platform=linux --arch=x64 sharp"
-  }
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-username/MobiGadget.git"
+  },
+  "bugs": {
+    "url": "https://github.com/your-username/MobiGadget/issues"
+  },
+  "homepage": "https://github.com/your-username/MobiGadget#readme"
 }
