@@ -1,19 +1,21 @@
 {
-  "name": "MobiGadget",
-  "version": "1.0.2",
+  "name": "mobigadget-autoblogger",
+  "version": "1.0.0",
+  "description": "An automated blogger script for posting tech news with SEO optimization and image branding.",
+  "main": "app.js",
   "type": "module",
-  "dependencies": {
-    "axios": "^1.6.0",
-    "better-sqlite3": "^11.0.0",
-    "dotenv": "^16.4.5",
-    "googleapis": "^140.0.1",
-    "node-cron": "^3.0.3",
-    "openai": "^4.52.7",
-    "rss-parser": "^3.13.0",
-    "sharp": "^0.33.4"
-  },
   "scripts": {
-    "start": "node app.js",
-    "install-sharp": "npm install --platform=linux --arch=x64 sharp"
+    "start": "npm install && node app.js",
+    "once": "npm install && MODE=once node app.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.8",
+    "better-sqlite3": "^9.5.0",
+    "dotenv": "^16.4.5",
+    "googleapis": "^134.0.0",
+    "jimp": "^0.22.12",
+    "node-cron": "^3.0.3",
+    "openai": "^4.30.0",
+    "rss-parser": "^3.13.0"
   }
 }
