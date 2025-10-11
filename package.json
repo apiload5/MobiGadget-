@@ -1,6 +1,6 @@
 {
-  "name": "gsm2blogger-lite",
-  "version": "1.1.0",
+  "name": "MobiGadget",
+  "version": "1.2.0",
   "description": "Auto-posts rewritten GSMArena / Engadget tech news to Blogger using OpenAI GPT-4o-mini. Optimized for low token usage (~1400 tokens/post).",
   "main": "app.js",
   "type": "module",
@@ -18,7 +18,7 @@
     "rss-parser": "^3.13.0"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   },
   "author": "Ticno Developer",
   "license": "MIT",
