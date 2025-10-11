@@ -1,48 +1,35 @@
 {
-  "name": "MobiGadget",
-  "version": "1.0.3",
-  "description": "Automated RSS to Blogger poster with AI content rewriting and logo replacement",
-  "type": "module",
+  "name": "gsm2blogger-lite",
+  "version": "1.1.0",
+  "description": "Auto-posts rewritten GSMArena / Engadget tech news to Blogger using OpenAI GPT-4o-mini. Optimized for low token usage (~1400 tokens/post).",
   "main": "app.js",
+  "type": "module",
   "scripts": {
     "start": "node app.js",
-    "dev": "node --watch app.js",
-    "test": "echo \"No tests specified\" && exit 0",
-    "setup": "npm install && mkdir -p assets data",
-    "install-sharp": "npm install --platform=linux --arch=x64 sharp"
+    "once": "MODE=once node app.js"
   },
-  "keywords": [
-    "blogger",
-    "rss",
-    "automation",
-    "openai",
-    "content",
-    "seo",
-    "gsmarena",
-    "autoposter"
-  ],
-  "author": "MobiGadget",
-  "license": "MIT",
   "dependencies": {
-    "axios": "^1.6.0",
-    "better-sqlite3": "^11.0.0",
+    "axios": "^1.7.7",
+    "better-sqlite3": "^9.6.0",
     "dotenv": "^16.4.5",
-    "googleapis": "^140.0.1",
+    "googleapis": "^147.0.0",
     "node-cron": "^3.0.3",
-    "openai": "^4.52.7",
-    "rss-parser": "^3.13.0",
-    "sharp": "^0.33.4"
+    "openai": "^4.73.0",
+    "rss-parser": "^3.13.0"
   },
   "engines": {
-    "node": ">=18.0.0",
-    "npm": ">=8.0.0"
+    "node": ">=18.0.0"
   },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/your-username/MobiGadget.git"
-  },
-  "bugs": {
-    "url": "https://github.com/your-username/MobiGadget/issues"
-  },
-  "homepage": "https://github.com/your-username/MobiGadget#readme"
+  "author": "Ticno Developer",
+  "license": "MIT",
+  "keywords": [
+    "blogger",
+    "automation",
+    "openai",
+    "rss",
+    "gpt-4o-mini",
+    "news-poster",
+    "tech-news",
+    "auto-blog"
+  ]
 }
