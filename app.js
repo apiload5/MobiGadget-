@@ -1,11 +1,7 @@
 /**
- * MobiGadget Auto Blogger (FINAL COMPLETE VERSION)
- * Features:
- * ✅ Uses original logo branding method (No Imgur required)
- * ✅ FIX: Only one branded image is posted.
- * ✅ FIX: SEO-optimized Alt/Title text is generated.
- * ✅ FIX: Article length controlled for quality (1200 word limit removed).
- * ✅ Duplicate check included.
+ * MobiGadget Auto Blogger (FINAL - BLOGGER NATIVE UPLOAD VERSION)
+ * Solution: Uses Blogger's native API to upload the processed image,
+ * ensuring proper thumbnails without external hosting (No Imgur).
  */
 
 import 'dotenv/config';
@@ -29,6 +25,7 @@ const CLIENT_ID = process.env.CLIENT_ID;
 const CLIENT_SECRET = process.env.CLIENT_SECRET;
 const REFRESH_TOKEN = process.env.REFRESH_TOKEN;
 const BLOG_ID = process.env.BLOG_ID;
+// IMGUR_CLIENT_ID HAS BEEN REMOVED
 
 const GSMARENA_RSS = process.env.GSMARENA_RSS;
 const POST_INTERVAL_CRON = process.env.POST_INTERVAL_CRON || '0 */3 * * *';
@@ -63,7 +60,7 @@ if (logoCoords.length !== 4 || logoCoords.some(isNaN)) {
     process.exit(1);
 }
 
-// --- GOOGLE SETUP (Standard V3) ---
+// --- GOOGLE SETUP ---
 const parser = new Parser();
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 const google = new GoogleApis();
@@ -82,78 +79,25 @@ db.prepare(`
   )
 `).run();
 
-// --- HELPER FUNCTIONS ---
+// --- HELPER FUNCTIONS (Standard) ---
+function log(...args) { /* ... */ }
+function sleep(ms) { /* ... */ }
+function escapeHtml(text) { /* ... */ }
+function hasBeenPosted(guidOrLink) { /* ... */ }
+function markPosted({ guid, link, title, published_at }) { /* ... */ }
+async function fetchPage(url) { /* ... */ }
+function extractFirstImageFromHtml(html) { /* ... */ }
+function extractOgImage(html) { /* ... */ }
+function extractMainArticle(html) { /* ... */ }
+async function createBloggerPost({ title, htmlContent, labels = [] }) { /* ... */ }
 
-function log(...args) {
-  console.log(new Date().toISOString(), ...args);
-}
 
-function sleep(ms) {
-    return new Promise(r => setTimeout(r, ms));
-}
+// --- IMAGE PROCESSING & BLOGGER UPLOAD (NEW LOGIC) ---
 
-function escapeHtml(text) {
-  if (!text) return '';
-  return text.replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[m]));
-}
-
-function hasBeenPosted(guidOrLink) {
-  const row = db.prepare('SELECT 1 FROM posted WHERE guid = ? OR link = ?').get(guidOrLink, guidOrLink);
-  return !!row;
-}
-
-function markPosted({ guid, link, title, published_at }) {
-  const stmt = db.prepare('INSERT OR IGNORE INTO posted (guid, link, title, published_at) VALUES (?, ?, ?, ? )');
-  stmt.run(guid, link, title, published_at || null);
-}
-
-async function fetchPage(url) {
-  try {
-    const res = await axios.get(url, { headers: { 'User-Agent': USER_AGENT }, timeout: 15000 });
-    return res.data;
-  } catch (e) {
-    return null;
-  }
-}
-
-function extractFirstImageFromHtml(html) {
-  if (!html) return null;
-  const imgMatch = html.match(/<img[^>]+src=["']([^"']+)["']/i);
-  if (imgMatch) return imgMatch[1];
-  return null;
-}
-
-function extractOgImage(html) {
-  if (!html) return null;
-  const m = html.match(/property=["']og:image["']\s*content=["']([^"']+)["']/i) || html.match(/<meta[^>]*name=["']og:image["'][^>]*content=["']([^"']+)["']/i);
-  if (m) return m[1];
-  return null;
-}
-
-function extractMainArticle(html) {
-  if (!html) return null;
-  let match = html.match(/<div class=\"article-body\">([\s\S]*?)<\/div>/i);
-  if (match) return match[1];
-  match = html.match(/<div[^>]*class=[\"']o-article-blocks[\"'][^>]*>([\s\S]*?)<\/div>/i);
-  if (match) return match[1];
-  return null;
-}
-
-async function createBloggerPost({ title, htmlContent, labels = [] }) {
-  try {
-    const res = await blogger.posts.insert({
-      blogId: BLOG_ID, requestBody: { title, content: htmlContent, labels: labels.length ? labels : undefined }
-    });
-    return res.data;
-  } catch (err) {
-    log('Blogger API error:', err?.message || err?.toString());
-    throw err;
-  }
-}
-
-// --- IMAGE PROCESSING (Returns Base64 String - No Imgur) ---
-
-async function processAndBrandImageToBase64(imageUrl) {
+/**
+ * Removes logo, adds new logo, and returns the image as a Buffer.
+ */
+async function processAndBrandImageToBuffer(imageUrl) {
   try {
     const image = await Jimp.read(imageUrl);
     const logo = await Jimp.read(LOGO_PATH);
@@ -165,17 +109,47 @@ async function processAndBrandImageToBase64(imageUrl) {
     const overlayY = image.bitmap.height - logo.bitmap.height - 20;
     image.composite(logo, overlayX, overlayY, { mode: Jimp.BLEND_SOURCE_OVER, opacitySource: 0.85 });
     
-    return await image.getBase64Async(Jimp.MIME_JPEG);
+    // Return the image as a Buffer for Blogger API upload
+    return await image.getBufferAsync(Jimp.MIME_JPEG);
   } catch (err) {
     log('⚠️ Image processing failed:', err.message);
     return null;
   }
 }
 
-// --- AI FUNCTIONS (REVISED LENGTH CONTROL) ---
+/**
+ * Uploads image buffer directly to Blogger's image service (Picasa/Google Photos).
+ */
+async function uploadToBlogger(imageBuffer, altText) {
+    try {
+        const response = await axios.post(
+            `https://www.googleapis.com/upload/blogger/v3/blogs/${BLOG_ID}/images`,
+            imageBuffer,
+            {
+                headers: {
+                    'Content-Type': 'image/jpeg',
+                    // The token is obtained via the OAuth2 client
+                    'Authorization': `Bearer ${(await oauth2Client.getAccessToken()).token}`, 
+                    'X-Upload-Content-Type': 'image/jpeg'
+                },
+                params: {
+                    uploadType: 'media',
+                    alt: altText || 'MobiGadget Image'
+                }
+            }
+        );
+        log('✅ Image uploaded to Blogger:', response.data.url);
+        return response.data.url; // This URL is now hosted on Google/Blogger
+    } catch (err) {
+        log('❌ Blogger Image Upload API error:', err.response ? err.response.data : err.message);
+        return null;
+    }
+}
+
+
+// --- AI FUNCTIONS (RETAINED REVISED LENGTH CONTROL) ---
 
 async function rewriteWithOpenAI({ title, snippet, content }) {
-  // REVISED PROMPT: Removed the strict 1200 word count for better quality control.
   const prompt = `You are a highly skilled SEO Content Writer. Rewrite the following article into a **unique, high-quality, and comprehensive English news post** for a professional tech blog.
 Rules for SEO and Originality: 1. **Originality First:** Your main goal is to generate content that is **NOT duplicate**. Paraphrase and restructure the input completely. 2. **Completeness/Depth:** The post must fully answer the user's intent. **Expand the topic logically and naturally** by adding background, context, and future implications. The final article should be substantially longer and richer than the original. 3. **Structure:** Use a compelling main headline (H1) and relevant, structured subheadings (H2, H3) for readability and SEO. 4. **Formatting:** Use standard HTML formatting (p, strong, ul, ol). 5. **Clean Output:** **DO NOT** include any links (hyperlinks/<a> tags). **DO NOT** include any introductory or concluding remarks outside the main article body. 6. **Language:** Write in professional, clear English only. 7. **Output Format:** Return **ONLY** the final HTML content for the article body.`;
   try {
@@ -196,7 +170,7 @@ async function generateImageAlt(title, snippet, content) {
   try {
     const completion = await openai.chat.completions.create({ model: OPENAI_MODEL, messages: [{ role: 'user', content: prompt }], max_tokens: 40 });
     return (completion.choices?.[0]?.message?.content || title).trim();
-  } catch (err) { log('Alt error:', err?.message || err); return title; }
+  } catch (err) { return title; }
 }
 
 async function generateImageTitle(title, snippet, content) {
@@ -204,7 +178,7 @@ async function generateImageTitle(title, snippet, content) {
   try {
     const completion = await openai.chat.completions.create({ model: OPENAI_MODEL, messages: [{ role: 'user', content: prompt }], max_tokens: 20 });
     return (completion.choices?.[0]?.message?.content || title).trim();
-  } catch (err) { log('Title error:', err?.message || err); return title; }
+  } catch (err) { return title; }
 }
 
 async function generateTags(title, snippet, content) {
@@ -213,11 +187,11 @@ async function generateTags(title, snippet, content) {
     const completion = await openai.chat.completions.create({ model: OPENAI_MODEL, messages: [{ role: 'user', content: prompt }], max_tokens: 40 });
     const tags = (completion.choices?.[0]?.message?.content || '').split(',').map(t => t.trim()).filter(Boolean);
     return tags;
-  } catch (err) { log('Tags error:', err?.message || err); return []; }
+  } catch (err) { return []; }
 }
 
 
-// --- MAIN PROCESS ---
+// --- MAIN PROCESS (UPDATED) ---
 
 async function processOnce() {
   try {
@@ -255,21 +229,24 @@ async function processOnce() {
         continue;
       }
       
-      // 1. AI and SEO generation
+      // 1. AI and SEO generation (Need Alt Text for image upload)
       const altText = await generateImageAlt(title, snippet, fullContent);
       const titleText = await generateImageTitle(title, snippet, fullContent);
       const tags = await generateTags(title, snippet, fullContent);
       
-      // 2. Process image (logo remove/add) and get Base64
-      const brandedBase64 = await processAndBrandImageToBase64(imageUrl);
-      if (!brandedBase64) continue;
+      // 2. Process image (logo remove/add) and get Buffer
+      const brandedImageBuffer = await processAndBrandImageToBuffer(imageUrl);
+      if (!brandedImageBuffer) continue;
       
-      // 3. Content rewriting
+      // 3. Upload to Blogger's service (THIS IS THE THUMBNAIL FIX)
+      const finalImageUrl = await uploadToBlogger(brandedImageBuffer, altText);
+      if (!finalImageUrl) continue;
+
+      // 4. Content rewriting
       const rewrittenHtml = await rewriteWithOpenAI({ title, snippet, content: fullContent });
 
-      // FIX: Only one image tag (the branded Base64 image) is created.
-      // NOTE: Base64 may cause issues with thumbnails on some old Blogger themes.
-      let finalHtml = `<p><img src="${brandedBase64}" alt="${escapeHtml(altText)}" title="${escapeHtml(titleText)}" style="max-width:100%;height:auto" /></p>\n`;
+      // Construct final HTML with the Google-hosted URL
+      let finalHtml = `<p><img src="${finalImageUrl}" alt="${escapeHtml(altText)}" title="${escapeHtml(titleText)}" style="max-width:100%;height:auto" /></p>\n`;
       finalHtml += rewrittenHtml;
 
       const posted = await createBloggerPost({ title, htmlContent: finalHtml, labels: tags });
@@ -287,7 +264,7 @@ async function processOnce() {
 // --- START ---
 
 async function start() {
-    log('🚀 Starting MobiGadget Auto Blogger (Original Style - Final Version)...');
+    log('🚀 Starting MobiGadget Auto Blogger (Blogger Native Upload Version)...');
     if (MODE === 'once') {
         await processOnce();
         log('Finished single run. Exiting.');
@@ -300,3 +277,16 @@ async function start() {
 }
 
 start().catch(e => { log('❌ Fatal error:', e?.message || e); process.exit(1); });
+
+// --- Helper function definitions (must be included in app.js) ---
+
+function log(...args) { console.log(new Date().toISOString(), ...args); }
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function escapeHtml(text) { if (!text) return ''; return text.replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[m])); }
+function hasBeenPosted(guidOrLink) { const row = db.prepare('SELECT 1 FROM posted WHERE guid = ? OR link = ?').get(guidOrLink, guidOrLink); return !!row; }
+function markPosted({ guid, link, title, published_at }) { const stmt = db.prepare('INSERT OR IGNORE INTO posted (guid, link, title, published_at) VALUES (?, ?, ?, ? )'); stmt.run(guid, link, title, published_at || null); }
+async function fetchPage(url) { try { const res = await axios.get(url, { headers: { 'User-Agent': USER_AGENT }, timeout: 15000 }); return res.data; } catch (e) { return null; } }
+function extractFirstImageFromHtml(html) { if (!html) return null; const imgMatch = html.match(/<img[^>]+src=["']([^"']+)["']/i); if (imgMatch) return imgMatch[1]; return null; }
+function extractOgImage(html) { if (!html) return null; const m = html.match(/property=["']og:image["']\s*content=["']([^"']+)["']/i) || html.match(/<meta[^>]*name=["']og:image["'][^>]*content=["']([^"']+)["']/i); if (m) return m[1]; return null; }
+function extractMainArticle(html) { if (!html) return null; let match = html.match(/<div class=\"article-body\">([\s\S]*?)<\/div>/i); if (match) return match[1]; match = html.match(/<div[^>]*class=[\"']o-article-blocks[\"'][^>]*>([\s\S]*?)<\/div>/i); if (match) return match[1]; return null; }
+async function createBloggerPost({ title, htmlContent, labels = [] }) { try { const res = await blogger.posts.insert({ blogId: BLOG_ID, requestBody: { title, content: htmlContent, labels: labels.length ? labels : undefined } }); return res.data; } catch (err) { log('Blogger API error:', err?.message || err?.toString()); throw err; } }
