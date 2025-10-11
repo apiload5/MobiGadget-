@@ -33,7 +33,7 @@ const MAX_ITEMS_PER_RUN = parseInt(process.env.MAX_ITEMS_PER_RUN || '1', 10);
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const DB_PATH = process.env.DB_PATH || './data/posts.db';
 const MODE = (process.env.MODE || 'cron').toLowerCase();
-const USER_AGENT = process.env.USER_AGENT || 'GSM2Blogger/1.0';
+const USER_AGENT = process.env.USER_AGENT || 'MobiGadget/1.0';
 const CUSTOM_LOGO_PATH = process.env.CUSTOM_LOGO_PATH || './assets/logo.png';
 const MAX_IMAGE_WIDTH = process.env.MAX_IMAGE_WIDTH || '800';
 
