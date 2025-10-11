@@ -1,7 +1,8 @@
 /**
  * app.js
  * 
- * GSMArena -> OpenAI -> Blogger with Perfect Logo Replacement
+ * MobiGadget - GSMArena RSS to Blogger Auto Poster
+ * Advanced duplicate prevention + logo replacement
  */
 
 import 'dotenv/config';
@@ -30,10 +31,10 @@ const POST_INTERVAL_CRON = process.env.POST_INTERVAL_CRON || '0 */3 * * *';
 const MAX_ITEMS_PER_RUN = parseInt(process.env.MAX_ITEMS_PER_RUN || '1', 10);
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const DB_PATH = process.env.DB_PATH || './data/posts.db';
-const MODE = (process.env.MODE || 'cron').toLowerCase();
+const MODE = (process.env.MODE || 'once').toLowerCase();
 const USER_AGENT = process.env.USER_AGENT || 'MobiGadget/1.0';
 const CUSTOM_LOGO_PATH = process.env.CUSTOM_LOGO_PATH || './assets/logo.png';
-const MAX_IMAGE_WIDTH = process.env.MAX_IMAGE_WIDTH || '1000'; // Increased to 1000px
+const MAX_IMAGE_WIDTH = process.env.MAX_IMAGE_WIDTH || '1000';
 
 if (!OPENAI_API_KEY) {
   console.error('ERROR: OPENAI_API_KEY not set in .env');
@@ -58,32 +59,65 @@ if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
 const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
 
-// Database schema
+// ENHANCED DATABASE SCHEMA
 db.prepare(`
   CREATE TABLE IF NOT EXISTS posted (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     guid TEXT UNIQUE,
     link TEXT UNIQUE,
     title TEXT,
+    title_slug TEXT UNIQUE,
+    content_hash TEXT,
     published_at TEXT,
     posted_at TEXT DEFAULT (datetime('now'))
   )
 `).run();
 
-function hasBeenPosted(guidOrLink) {
-  const row = db.prepare('SELECT 1 FROM posted WHERE guid = ? OR link = ?').get(guidOrLink, guidOrLink);
-  return !!row;
+// FUNCTION: Generate title slug for duplicate checking
+function generateSlug(title) {
+  return title.toLowerCase()
+    .replace(/[^\w\s]/g, '')
+    .replace(/\s+/g, '-')
+    .substring(0, 100);
 }
 
-function markPosted({ guid, link, title, published_at }) {
-  const stmt = db.prepare('INSERT OR IGNORE INTO posted (guid, link, title, published_at) VALUES (?, ?, ?, ?)');
-  stmt.run(guid, link, title, published_at || null);
+// FUNCTION: Advanced duplicate checking
+function hasBeenPosted(guid, link, title) {
+  const titleSlug = generateSlug(title);
+  
+  // Check exact matches
+  const exactMatch = db.prepare(`
+    SELECT 1 FROM posted WHERE guid = ? OR link = ? OR title_slug = ?
+  `).get(guid, link, titleSlug);
+  
+  if (exactMatch) return true;
+  
+  // Check similar titles (first 5 words)
+  const titleWords = title.toLowerCase().split(' ').slice(0, 5).join(' ');
+  const similarMatch = db.prepare(`
+    SELECT title FROM posted WHERE title LIKE ?
+  `).get(`%${titleWords}%`);
+  
+  return !!similarMatch;
 }
 
+// FUNCTION: Mark as posted
+function markPosted({ guid, link, title, content_hash, published_at }) {
+  const titleSlug = generateSlug(title);
+  const stmt = db.prepare(`
+    INSERT OR IGNORE INTO posted 
+    (guid, link, title, title_slug, content_hash, published_at) 
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
+  stmt.run(guid, link, title, titleSlug, content_hash, published_at || null);
+}
+
+// FUNCTION: Log with timestamp
 function log(...args) {
   console.log(new Date().toISOString(), ...args);
 }
 
+// FUNCTION: Fetch webpage
 async function fetchPage(url) {
   try {
     const res = await axios.get(url, {
@@ -96,6 +130,7 @@ async function fetchPage(url) {
   }
 }
 
+// FUNCTION: Extract first image from HTML
 function extractFirstImageFromHtml(html) {
   if (!html) return null;
   const imgMatch = html.match(/<img[^>]+src=["']([^"']+)["']/i);
@@ -103,6 +138,7 @@ function extractFirstImageFromHtml(html) {
   return null;
 }
 
+// FUNCTION: Extract OG image
 function extractOgImage(html) {
   if (!html) return null;
   const m = html.match(/property=["']og:image["']\s*content=["']([^"']+)["']/i) || 
@@ -111,6 +147,7 @@ function extractOgImage(html) {
   return null;
 }
 
+// FUNCTION: Extract main article content
 function extractMainArticle(html) {
   if (!html) return null;
 
@@ -125,7 +162,7 @@ function extractMainArticle(html) {
   return null;
 }
 
-// PERFECT LOGO REPLACEMENT FUNCTION
+// FUNCTION: Replace GSMArena logo with custom logo
 async function replaceGSMArenaLogo(originalImageUrl, customLogoPath) {
   try {
     log('🔄 Starting logo replacement process...');
@@ -146,8 +183,8 @@ async function replaceGSMArenaLogo(originalImageUrl, customLogoPath) {
     
     log(`📐 Original image dimensions: ${metadata.width}x${metadata.height}`);
     
-    // RESIZE ORIGINAL IMAGE TO LARGER SIZE
-    const targetWidth = Math.min(metadata.width, 1200); // Max 1200px width
+    // Resize original image to larger size
+    const targetWidth = Math.min(metadata.width, 1200);
     const resizedImage = await originalImage
       .resize(targetWidth, null, {
         fit: 'inside',
@@ -160,22 +197,22 @@ async function replaceGSMArenaLogo(originalImageUrl, customLogoPath) {
     const resizedMetadata = await sharp(resizedImage).metadata();
     log(`📏 Resized image to: ${resizedMetadata.width}x${resizedMetadata.height}`);
     
-    // Calculate logo size (8% of image width - optimal visibility)
+    // Calculate logo size (8% of image width)
     const logoWidth = Math.floor(resizedMetadata.width * 0.08);
-    const logoHeight = Math.floor(logoWidth * 0.8); // Maintain aspect ratio
+    const logoHeight = Math.floor(logoWidth * 0.8);
     
     log(`🎯 Logo size: ${logoWidth}x${logoHeight}`);
     
-    // Resize logo with white background for better visibility
+    // Resize logo
     const resizedLogo = await sharp(logoBuffer)
       .resize(logoWidth, logoHeight, {
         fit: 'contain',
-        background: { r: 255, g: 255, b: 255, alpha: 0.9 } // Semi-transparent white background
+        background: { r: 255, g: 255, b: 255, alpha: 0.9 }
       })
       .png()
       .toBuffer();
     
-    // Position: Bottom Right corner with small margin
+    // Position: Bottom Right corner
     const left = resizedMetadata.width - logoWidth - 15;
     const top = resizedMetadata.height - logoHeight - 15;
     
@@ -187,7 +224,7 @@ async function replaceGSMArenaLogo(originalImageUrl, customLogoPath) {
         input: resizedLogo,
         top: top,
         left: left,
-        blend: 'over' // Proper blending mode
+        blend: 'over'
       }])
       .jpeg({ 
         quality: 85,
@@ -204,32 +241,40 @@ async function replaceGSMArenaLogo(originalImageUrl, customLogoPath) {
   }
 }
 
+// FUNCTION: Upload image to Blogger (Base64 fallback)
 async function uploadImageToBlogger(imageBuffer, title) {
   try {
     const base64Image = imageBuffer.toString('base64');
     const timestamp = Date.now();
     const filename = `mobigadget-${timestamp}.jpg`;
     
+    log('📤 Uploading image to Blogger...');
+    
     const media = await blogger.media.insert({
       blogId: BLOG_ID,
-      media: {
-        mimeType: 'image/jpeg',
-        data: base64Image
-      },
       requestBody: {
         title: `MobiGadget - ${title}`,
         fileName: filename
+      },
+      media: {
+        mimeType: 'image/jpeg',
+        data: base64Image
       }
     });
     
     log('✅ Image uploaded to Blogger successfully');
     return media.data.url;
   } catch (err) {
-    log('❌ Image upload error:', err?.message || err);
-    return null;
+    log('❌ Image upload failed, using base64 fallback:', err.message);
+    
+    // Fallback: Use base64 data URL
+    const base64Data = imageBuffer.toString('base64');
+    const dataUrl = `data:image/jpeg;base64,${base64Data}`;
+    return dataUrl;
   }
 }
 
+// FUNCTION: Rewrite content with OpenAI
 async function rewriteWithOpenAI({ title, snippet, content }) {
   const prompt = `You are a highly skilled SEO Content Writer. Rewrite the following article into a **unique, high-quality, and comprehensive English news post** for a professional tech blog.
 
@@ -260,7 +305,7 @@ Rules for SEO and Originality:
   }
 }
 
-// IMPROVED ALT TEXT - Focus on image description
+// FUNCTION: Generate image alt text
 async function generateImageAlt(title, snippet, content) {
   const prompt = `Create a descriptive ALT TEXT for a smartphone product image. Describe what is visible in the picture. Be specific about the product, its features, and any visible details. Keep it under 10 words.
 
@@ -276,7 +321,6 @@ Return ONLY the alt text, no explanations.`;
     });
     let altText = completion.choices?.[0]?.message?.content || '';
     
-    // Clean up
     altText = altText.replace(/^alt text:?/i, '').trim();
     altText = altText.replace(/^["']|["']$/g, '');
     
@@ -287,7 +331,7 @@ Return ONLY the alt text, no explanations.`;
   }
 }
 
-// IMPROVED TITLE TEXT - Focus on SEO keywords
+// FUNCTION: Generate image title text
 async function generateImageTitle(title, snippet, content) {
   const prompt = `Generate a short SEO-friendly TITLE for a smartphone image. Use high-search-volume keywords related to mobile technology. Focus on trending terms and main features. 3-5 words maximum.
 
@@ -303,7 +347,6 @@ Return ONLY the title text, no explanations.`;
     });
     let titleText = completion.choices?.[0]?.message?.content || '';
     
-    // Clean up
     titleText = titleText.replace(/^title:?/i, '').trim();
     titleText = titleText.replace(/^["']|["']$/g, '');
     
@@ -314,6 +357,7 @@ Return ONLY the title text, no explanations.`;
   }
 }
 
+// FUNCTION: Generate tags
 async function generateTags(title, snippet, content) {
   const prompt = `Generate 3-6 SEO-friendly tags for this article. Return as comma-separated keywords only.\nTitle: ${title}\nSnippet: ${snippet}\nContent: ${content}`;
 
@@ -331,6 +375,7 @@ async function generateTags(title, snippet, content) {
   }
 }
 
+// FUNCTION: Create Blogger post
 async function createBloggerPost({ title, htmlContent, labels = [] }) {
   try {
     const res = await blogger.posts.insert({
@@ -348,6 +393,46 @@ async function createBloggerPost({ title, htmlContent, labels = [] }) {
   }
 }
 
+// FUNCTION: Check Blogger for existing posts
+async function checkBloggerForExistingPosts(title) {
+  try {
+    log('🔍 Checking Blogger for existing posts...');
+    
+    const posts = await blogger.posts.list({
+      blogId: BLOG_ID,
+      maxResults: 20,
+      fetchBodies: false
+    });
+    
+    if (posts.data.items) {
+      const cleanNewTitle = title.toLowerCase().replace(/[^\w\s]/g, '');
+      
+      for (const post of posts.data.items) {
+        const cleanExistingTitle = post.title.toLowerCase().replace(/[^\w\s]/g, '');
+        
+        // Check if titles are similar
+        if (cleanNewTitle.includes(cleanExistingTitle.substring(0, 20)) || 
+            cleanExistingTitle.includes(cleanNewTitle.substring(0, 20))) {
+          log(`❌ Similar post found on Blogger: "${post.title}"`);
+          return true;
+        }
+      }
+    }
+    
+    return false;
+  } catch (err) {
+    log('Blogger check error:', err?.message || err);
+    return false;
+  }
+}
+
+// FUNCTION: Generate content hash
+function generateContentHash(content) {
+  const crypto = require('crypto');
+  return crypto.createHash('md5').update(content).digest('hex');
+}
+
+// MAIN PROCESSING FUNCTION
 async function processOnce() {
   try {
     log('📡 Fetching RSS:', GSMARENA_RSS);
@@ -363,9 +448,17 @@ async function processOnce() {
       const link = item.link;
       const title = item.title || 'Untitled';
 
-      // Duplicate check
-      if (hasBeenPosted(guid) || hasBeenPosted(link)) {
-        log('❌ Already posted:', title);
+      log(`🔍 Checking: "${title}"`);
+
+      // ENHANCED DUPLICATE CHECKING
+      if (hasBeenPosted(guid, link, title)) {
+        log('❌ Already posted in database:', title);
+        continue;
+      }
+
+      const bloggerDuplicate = await checkBloggerForExistingPosts(title);
+      if (bloggerDuplicate) {
+        log('❌ Similar post found on Blogger:', title);
         continue;
       }
 
@@ -405,7 +498,7 @@ async function processOnce() {
         log(`📝 Alt Text: ${altText}`);
         log(`🏷️ Title Text: ${titleText}`);
         
-        // LOGO REPLACEMENT FOR ALL IMAGES (not just GSMArena)
+        // LOGO REPLACEMENT WITH FALLBACK
         const customLogoPath = CUSTOM_LOGO_PATH;
         
         if (fs.existsSync(customLogoPath)) {
@@ -422,14 +515,14 @@ async function processOnce() {
                        alt="${escapeHtml(altText)}" 
                        title="${escapeHtml(titleText)}" 
                        style="max-width: ${MAX_IMAGE_WIDTH}px; width: 100%; height: auto; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);" />
-                  <p style="font-style: italic; color: #666; margin-top: 8px; font-size: 14px;">Image: ${escapeHtml(altText)}</p>
+                  <p style="font-style: italic; color: #666; margin-top: 8px; font-size: 14px;">${escapeHtml(altText)}</p>
                 </div>\n`;
                 log('✅ Logo watermark applied successfully');
               } else {
-                throw new Error('Failed to upload watermarked image');
+                throw new Error('Image upload failed');
               }
             } else {
-              throw new Error('Failed to create watermarked image');
+              throw new Error('Logo replacement failed');
             }
           } catch (watermarkError) {
             log('❌ Watermarking failed, using original image:', watermarkError.message);
@@ -464,13 +557,16 @@ async function processOnce() {
         continue;
       }
 
-      log('✅ Posted to Blogger:', posted.url || posted.id);
+      log('✅ Posted to Blogger:', posted.url);
       log('🏷️ Tags used:', tags);
       
+      // Mark as posted with enhanced tracking
+      const contentHash = generateContentHash(fullContent);
       markPosted({ 
         guid, 
         link, 
         title, 
+        content_hash: contentHash,
         published_at: item.pubDate || item.isoDate || null 
       });
       
@@ -486,6 +582,7 @@ async function processOnce() {
   }
 }
 
+// HELPER FUNCTIONS
 function sleep(ms) { 
   return new Promise(r => setTimeout(r, ms)); 
 }
@@ -497,8 +594,9 @@ function escapeHtml(text) {
   }[m]));
 }
 
+// START APPLICATION
 async function start() {
-  log('🚀 Starting MobiGadget with Perfect Logo Replacement', { 
+  log('🚀 Starting MobiGadget Auto Poster', { 
     MODE, 
     OPENAI_MODEL, 
     GSMARENA_RSS,
@@ -506,12 +604,11 @@ async function start() {
     MAX_IMAGE_WIDTH: '1000px'
   });
   
-  // Check assets
+  // Check dependencies
   if (fs.existsSync(CUSTOM_LOGO_PATH)) {
     log('✅ Custom logo found:', CUSTOM_LOGO_PATH);
   } else {
-    log('❌ ERROR: Custom logo not found at:', CUSTOM_LOGO_PATH);
-    log('💡 Please add your logo.png file to the assets folder');
+    log('❌ Custom logo not found:', CUSTOM_LOGO_PATH);
   }
   
   if (MODE === 'once') {
@@ -519,14 +616,4 @@ async function start() {
     log('🎯 Finished single run. Exiting.');
     process.exit(0);
   } else {
-    log('⏰ Scheduling cron:', POST_INTERVAL_CRON);
-    await processOnce();
-    cron.schedule(POST_INTERVAL_CRON, processOnce);
-    process.stdin.resume();
-  }
-}
-
-start().catch(e => { 
-  log('💥 Fatal error:', e?.message || e); 
-  process.exit(1); 
-});
+    log('⏰ Scheduling cron:', POST_INTERVA
