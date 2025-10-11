@@ -1,7 +1,7 @@
 {
   "name": "MobiGadget",
-  "version": "1.2.0",
-  "description": "Auto-posts rewritten GSMArena / Engadget tech news to Blogger using OpenAI GPT-4o-mini. Optimized for low token usage (~1400 tokens/post).",
+  "version": "1.0.0",
+  "description": "Hybrid GSMArena/Engadget to Blogger autoposter with OpenAI rewriting and SEO optimization.",
   "main": "app.js",
   "type": "module",
   "scripts": {
@@ -9,27 +9,17 @@
     "once": "MODE=once node app.js"
   },
   "dependencies": {
-    "axios": "^1.7.7",
-    "better-sqlite3": "^9.6.0",
-    "dotenv": "^16.4.5",
-    "googleapis": "^147.0.0",
-    "node-cron": "^3.0.3",
-    "openai": "^4.73.0",
-    "rss-parser": "^3.13.0"
+    "dotenv": "^16.3.1",
+    "rss-parser": "^3.12.0",
+    "axios": "^1.7.0",
+    "better-sqlite3": "^9.4.0",
+    "googleapis": "^140.0.1",
+    "openai": "^4.55.3",
+    "node-cron": "^3.0.3"
   },
   "engines": {
     "node": ">=20.0.0"
   },
   "author": "Ticno Developer",
-  "license": "MIT",
-  "keywords": [
-    "blogger",
-    "automation",
-    "openai",
-    "rss",
-    "gpt-4o-mini",
-    "news-poster",
-    "tech-news",
-    "auto-blog"
-  ]
+  "license": "MIT"
 }
