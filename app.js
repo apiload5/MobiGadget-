@@ -229,13 +229,13 @@ async function uploadImageToBlogger(imageBuffer, title) {
     return null;
   }
 }
+// --- AI FUNCTIONS (FINAL IMPROVED PROMPTS) ---
 
 async function rewriteWithOpenAI({ title, snippet, content }) {
   const prompt = `You are a highly skilled SEO Content Writer. Rewrite the following article into a **unique, high-quality, and comprehensive English news post** for a professional tech blog.
-
 Rules for SEO and Originality:
 1.  **Originality First:** Your main goal is to generate content that is **NOT duplicate**. Paraphrase and restructure the input completely.
-2.  **Completeness/Depth:** The post must fully answer the user's intent. **Expand the topic to reach a minimum length of 1200 words** (unless the topic is extremely simple).
+2.  **Completeness/Depth:** The post must fully answer the user's intent. **Expand the topic logically and naturally** by adding background, context, and future implications. The final article should be detailed and richer than the original, but **do not artificially inflate the word count**. Ensure all facts are derived from the original content.
 3.  **Structure:** Use a compelling main headline (H1) and relevant, structured subheadings (H2, H3) for readability and SEO.
 4.  **Formatting:** Use standard HTML formatting (p, strong, ul, ol).
 5.  **Clean Output:** **DO NOT** include any links (hyperlinks/<a> tags). **DO NOT** include any introductory or concluding remarks outside the main article body.
@@ -250,6 +250,7 @@ Rules for SEO and Originality:
     });
     let text = completion.choices?.[0]?.message?.content || '';
 
+    // Clean up
     text = text.replace(/\.\.\.\s*html/gi, '');
     text = text.replace(/<a [^>]*>(.*?)<\/a>/gi, '$1');
 
@@ -260,12 +261,10 @@ Rules for SEO and Originality:
   }
 }
 
-// IMPROVED ALT TEXT - Focus on image description
+// IMPROVED ALT TEXT - Focus on image description for Accessibility & SEO
 async function generateImageAlt(title, snippet, content) {
-  const prompt = `Create a descriptive ALT TEXT for a smartphone product image. Describe what is visible in the picture. Be specific about the product, its features, and any visible details. Keep it under 10 words.
-
-Article about: ${title}
-
+  const prompt = `Create a highly descriptive and SEO-friendly ALT TEXT (5-10 words) for the main image of this article. Focus on describing the product and its most visible features to aid visual accessibility and image search ranking.
+Article Title: ${title}
 Return ONLY the alt text, no explanations.`;
 
   try {
@@ -287,12 +286,10 @@ Return ONLY the alt text, no explanations.`;
   }
 }
 
-// IMPROVED TITLE TEXT - Focus on SEO keywords
+// IMPROVED TITLE TEXT - Focus on core SEO keywords
 async function generateImageTitle(title, snippet, content) {
-  const prompt = `Generate a short SEO-friendly TITLE for a smartphone image. Use high-search-volume keywords related to mobile technology. Focus on trending terms and main features. 3-5 words maximum.
-
+  const prompt = `Generate a short SEO-friendly TITLE text (3-5 words) for the image in this article. Use the most important, high-search-volume keywords that summarize the news.
 Context: ${title}
-
 Return ONLY the title text, no explanations.`;
 
   try {
@@ -314,8 +311,34 @@ Return ONLY the title text, no explanations.`;
   }
 }
 
+// IMPROVED TAGS - Focus on High-Ranking, Relevant Keywords for SEO Labels
 async function generateTags(title, snippet, content) {
-  const prompt = `Generate 3-6 SEO-friendly tags for this article. Return as comma-separated keywords only.\nTitle: ${title}\nSnippet: ${snippet}\nContent: ${content}`;
+  const prompt = `You are an SEO expert. Generate 3-6 highly relevant, high-search-volume keywords that would be used as blog tags/labels for this tech news article.
+Rules:
+1. Keywords must be in English and separated by commas.
+2. Focus on specific device names, brands, and main features.
+3. Return ONLY the comma-separated list of keywords.
+
+Article Title: ${title}
+Snippet: ${snippet}
+Content: ${content}`;
+
+  try {
+    const completion = await openai.chat.completions.create({
+      model: OPENAI_MODEL,
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 40
+    });
+    const tags = (completion.choices?.[0]?.message?.content || '')
+        .split(',')
+        .map(t => t.trim())
+        .filter(Boolean);
+    return tags;
+  } catch (err) {
+    log('Tags error:', err?.message || err);
+    return [];
+  }
+}
 
   try {
     const completion = await openai.chat.completions.create({
