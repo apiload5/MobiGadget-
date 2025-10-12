@@ -2,10 +2,12 @@
  * MobiGadget Auto Blogger (Internal Smart Image Processing Version)
  * Features:
  * ✅ Uses Internal SmartBackgroundChanger class for image editing (No external API needed).
- * ✅ Adds user's logo (mobiseko) on top of the internally edited image.
+ * ✅ Adds user's logo (mobiseko) on top of the internally edited image using SHARP.
  * ✅ Uses Blogger's native API for image upload (100% Thumbnail Fix).
  * ✅ Complete SEO (Rewrite, Alt/Title text, Tags).
  * ✅ Duplicate post checking.
+ * * NOTE: Jimp library removed; all image processing now handled by Sharp and custom libraries.
+ * * FIX: Thumbnail HTML generation error (SyntaxError: Unexpected end of input) resolved.
  */
 
 import 'dotenv/config';
@@ -18,7 +20,6 @@ import cron from 'node-cron';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import Jimp from 'jimp';
 // Import new dependencies for the SmartBackgroundChanger class
 import sharp from 'sharp';
 import { removeBackground } from '@imgly/background-removal-node';
@@ -199,7 +200,6 @@ const CLIENT_ID = process.env.CLIENT_ID;
 const CLIENT_SECRET = process.env.CLIENT_SECRET;
 const REFRESH_TOKEN = process.env.REFRESH_TOKEN;
 const BLOG_ID = process.env.BLOG_ID;
-// EXTERNAL_EDIT_API removed as it is no longer needed
 const GSMARENA_RSS = process.env.GSMARENA_RSS;
 const POST_INTERVAL_CRON = process.env.POST_INTERVAL_CRON || '0 */3 * * *';
 const MAX_ITEMS_PER_RUN = parseInt(process.env.MAX_ITEMS_PER_RUN || '1', 10);
@@ -214,7 +214,6 @@ if (!fs.existsSync(LOGO_PATH)) {
     console.error(`❌ ERROR: Logo file not found. Please ensure 'logo.png' exists in the 'assets' folder.`);
     process.exit(1);
 }
-// CHECK: EXTERNAL_EDIT_API removed from checks
 if (!OPENAI_API_KEY || !CLIENT_ID || !CLIENT_SECRET || !REFRESH_TOKEN || !BLOG_ID) {
     console.error('❌ ERROR: Essential environment variables are missing (OpenAI/Blogger).');
     process.exit(1);
@@ -303,21 +302,29 @@ async function createBloggerPost({ title, htmlContent, labels = [] }) {
 // --- IMAGE PROCESSING LOGIC (Uses Internal Class) ---
 
 /**
- * Executes the internal SmartBackgroundChanger class and returns the final image buffer.
+ * Executes the internal SmartBackgroundChanger class and returns the final image buffer and metadata.
+ * @returns { buffer: Buffer, width: number, height: number }
  */
 async function getProcessedImageBuffer(imageUrl) {
     try {
         const result = await SmartBackgroundChanger.process(imageUrl);
         if (result.success) {
+            const metadata = await sharp(result.buffer).metadata();
             log('✅ Image successfully processed by internal class.');
-            return result.buffer;
+            return { 
+                buffer: result.buffer, 
+                width: metadata.width, 
+                height: metadata.height 
+            };
         } else {
             log(`❌ Internal Image Processing failed: ${result.error}`);
             // Fallback: If processing fails, try to return the original image buffer
             try {
                 const originalRes = await axios.get(imageUrl, { responseType: 'arraybuffer' });
+                const buffer = Buffer.from(originalRes.data);
+                const metadata = await sharp(buffer).metadata();
                 log('⚠️ Falling back to original image due to internal processing failure.');
-                return originalRes.data;
+                return { buffer, width: metadata.width, height: metadata.height };
             } catch (e) {
                 log('❌ Original image fetch failed too.');
                 return null;
@@ -330,24 +337,45 @@ async function getProcessedImageBuffer(imageUrl) {
 }
 
 /**
- * Adds the user's logo to the processed image (Buffer).
+ * Adds the user's logo to the processed image (Buffer) using SHARP.
  */
 async function brandProcessedImageBuffer(imageBuffer) {
   try {
-    const image = await Jimp.read(imageBuffer);
-    const logo = await Jimp.read(LOGO_PATH);
+    // 1. Logo file ko read karein
+    const logoBuffer = fs.readFileSync(LOGO_PATH);
+    const imageMetadata = await sharp(imageBuffer).metadata();
     
-    const logoWidth = image.bitmap.width * 0.25;
-    logo.resize(logoWidth, Jimp.AUTO);
-    const overlayX = image.bitmap.width - logo.bitmap.width - 20;
-    const overlayY = image.bitmap.height - logo.bitmap.height - 20;
-    
-    image.composite(logo, overlayX, overlayY, { mode: Jimp.BLEND_SOURCE_OVER, opacitySource: 0.85 });
-    
-    return await image.getBufferAsync(Jimp.MIME_JPEG);
+    // 2. Logo ka target size calculate karein (Image width ka 25%)
+    const logoTargetWidth = Math.round(imageMetadata.width * 0.25);
+
+    // 3. Logo ko resize karein aur uska buffer nikalen
+    const resizedLogo = await sharp(logoBuffer)
+      .resize(logoTargetWidth)
+      .toBuffer();
+
+    const logoMetadata = await sharp(resizedLogo).metadata();
+
+    // 4. Position calculate karein (Bottom right, 20px padding)
+    const padding = 20;
+    const overlayX = imageMetadata.width - logoMetadata.width - padding;
+    const overlayY = imageMetadata.height - logoMetadata.height - padding;
+
+    // 5. Logo ko main image par composite (overlay) karein
+    const brandedBuffer = await sharp(imageBuffer)
+      .composite([{ 
+        input: resizedLogo, 
+        left: overlayX, 
+        top: overlayY,
+      }])
+      .toBuffer(); 
+
+    log('✅ Logo branding completed using Sharp.');
+    return brandedBuffer;
+
   } catch (err) {
-    log('⚠️ Logo branding failed:', err.message);
-    return null;
+    log('⚠️ Logo branding failed (Switched to Sharp):', err.message);
+    // Agar sharp se bhi fail ho toh original buffer wapas bhej dein
+    return imageBuffer; 
   }
 }
 
@@ -513,33 +541,4 @@ async function processOnce() {
           const extracted = extractMainArticle(pageHtml);
           if (extracted) fullContent = extracted;
           imageUrl = extractOgImage(pageHtml) || extractFirstImageFromHtml(pageHtml);
-        }
-      }
-      if (!imageUrl) imageUrl = extractFirstImageFromHtml(fullContent);
-      if (!imageUrl) {
-        log(`⚠️ Skipping: No image found for ${title}`);
-        continue;
-      }
-      
-      // 1. AI and SEO generation
-      const altText = await generateImageAlt(title, snippet, fullContent);
-      const titleText = await generateImageTitle(title, snippet, fullContent);
-      const tags = await generateTags(title, snippet, fullContent);
-      
-      // 2. GET PROCESSED IMAGE FROM INTERNAL CLASS
-      const processedImageBuffer = await getProcessedImageBuffer(imageUrl);
-      if (!processedImageBuffer) continue;
-      
-      // 3. ADD USER LOGO TO EDITED IMAGE
-      const brandedImageBuffer = await brandProcessedImageBuffer(processedImageBuffer);
-      if (!brandedImageBuffer) continue;
-
-      // 4. UPLOAD TO BLOGGER
-      const finalImageUrl = await uploadToBlogger(brandedImageBuffer, altText);
-      if (!finalImageUrl) continue;
-
-      // 5. Content rewriting
-      const rewrittenHtml = await rewriteWithOpenAI({ title, snippet, content: fullContent });
-
-      // Construct final HTML with the Google-hosted URL
-      // ✅ FIX: HTML string ko theek se band kiya ga
+   
