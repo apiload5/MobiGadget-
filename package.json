@@ -1,20 +1,19 @@
 {
-  "name": "MobiGadget-autoposter",
-  "version": "2.1.0",
-  "description": "Automated tech news synthesis and posting to Blogger using GPT and Unsplash.",
-  "main": "app.js",
+  "name": "Mobiseko-Final",
+  "version": "1.0.6",
   "type": "module",
+  "description": "Final stable build for Mobiseko auto-posting with SEO focus and Unsplash integration.",
+  "main": "app.js",
   "scripts": {
-    "start": "node app.js",
-    "once": "MODE=once node app.js"
+    "start": "node app.js"
   },
   "dependencies": {
-    "axios": "^1.6.8",
-    "better-sqlite3": "^9.4.3",
+    "axios": "^1.6.0",
+    "better-sqlite3": "^11.0.0",
     "dotenv": "^16.4.5",
-    "googleapis": "^133.0.0",
+    "googleapis": "^140.0.1",
     "node-cron": "^3.0.3",
-    "openai": "^4.28.4",
+    "openai": "^4.52.7",
     "rss-parser": "^3.13.0"
   }
 }
