@@ -1,11 +1,6 @@
 /**
- * MobiGadget Auto Blogger (External API Integration Version - SECRET FIX)
- * Features:
- * ✅ Uses External API URL loaded from .env for security.
- * ✅ Adds user's logo (mobiseko) on top of the externally edited image.
- * ✅ Uses Blogger's native API for image upload (100% Thumbnail Fix, No Imgur).
- * ✅ Complete SEO (Rewrite, Alt/Title text, Tags).
- * ✅ Duplicate post checking.
+ * MobiGadget Auto Blogger (External API Integration Version - SECRET FIX - DB_PATH FIX)
+ * Fixes: DB_PATH re-declaration error.
  */
 
 import 'dotenv/config';
@@ -29,14 +24,13 @@ const CLIENT_ID = process.env.CLIENT_ID;
 const CLIENT_SECRET = process.env.CLIENT_SECRET;
 const REFRESH_TOKEN = process.env.REFRESH_TOKEN;
 const BLOG_ID = process.env.BLOG_ID;
-// ✅ API URL LOADED FROM .ENV
 const EXTERNAL_EDIT_API = process.env.EXTERNAL_EDIT_API; 
 
 const GSMARENA_RSS = process.env.GSMARENA_RSS;
 const POST_INTERVAL_CRON = process.env.POST_INTERVAL_CRON || '0 */3 * * *';
 const MAX_ITEMS_PER_RUN = parseInt(process.env.MAX_ITEMS_PER_RUN || '1', 10);
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
-const DB_PATH = process.env.DB_PATH || './data/posts.db';
+const DB_PATH = process.env.DB_PATH || './data/posts.db'; // Kept as first declaration
 const MODE = (process.env.MODE || 'cron').toLowerCase();
 const USER_AGENT = process.env.USER_AGENT || 'MobiGadget/3.0';
 
@@ -58,8 +52,7 @@ const oauth2Client = new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET);
 oauth2Client.setCredentials({ refresh_token: REFRESH_TOKEN });
 const blogger = google.blogger({ version: 'v3', auth: oauth2Client }); 
 
-// Database setup unchanged
-const DB_PATH = process.env.DB_PATH || './data/posts.db';
+// Database setup: Now only using the first declared DB_PATH variable
 const dbDir = path.dirname(DB_PATH);
 if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
 const db = new Database(DB_PATH);
