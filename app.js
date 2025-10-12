@@ -53,7 +53,7 @@ class SmartBackgroundChanger {
 
       // 🧩 Step 3: Remove background
       const foregroundBlob = await removeBackground(imageBuffer);
-      imageBuffer = Buffer.from(await foregroundBlob.arrayBuffer());
+      imageBuffer = Buffer.from(await foregroundBlob.arraybuffer());
 
       // 🧩 Step 4: Improve quality
       imageBuffer = await this.improveImageQuality(imageBuffer);
@@ -541,4 +541,5 @@ async function processOnce() {
       const rewrittenHtml = await rewriteWithOpenAI({ title, snippet, content: fullContent });
 
       // Construct final HTML with the Google-hosted URL
-      let finalHtml = `<p><img src="${finalImageUrl}" alt="${escapeHtml(altText)}" title="${escapeHtml(titleText)}" style="max-
+      // ✅ FIX: String/Template Literal completed here
+      let finalHtml = `<p><img src="${finalImageUrl}" alt="${escapeHtml(
