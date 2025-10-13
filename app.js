@@ -1,11 +1,11 @@
 /**
- * app.js - FINAL STABLE VERSION (Source Credit REMOVED)
+ * app.js - FINAL STABLE VERSION (Bug Fixed: Blogger Image Upload)
  * * Features:
- * ✅ STABLE: Uses title_slug, guid, and link for robust duplicate checking (like the old stable version).
+ * ✅ STABLE: Uses title_slug, guid, and link for robust duplicate checking.
  * ✅ SEO-FOCUSED: New efficient AI prompt for 350-450 word, factual content.
  * ✅ CLEAN: Removed sharp, logo, and all local image manipulation.
  * ✅ FIX: Source Credit Line is COMPLETELY REMOVED from the post content.
- * ✅ IMAGE: Unsplash fetching and Blogger upload for best possible thumbnail generation.
+ * ✅ FIX: Critical Blogger Image Upload Bug (blogger.media.insert syntax) has been corrected.
  */
 
 import 'dotenv/config';
@@ -141,7 +141,7 @@ async function fetchUnsplashImage(query) {
         return null;
 
     } catch (e) {
-        log('❌ Unsplash API Error:', e.message);
+        log('❌ Unsplash API Error (Will continue without image):', e.message);
         return null;
     }
 }
@@ -156,21 +156,32 @@ async function uploadExternalImageToBlogger(imageUrl, title) {
         });
         
         const mimeType = imageResponse.headers['content-type'] || 'image/jpeg';
-        const base64Image = Buffer.from(imageResponse.data).toString('base64');
+        const imageBuffer = Buffer.from(imageResponse.data); // Use Buffer
 
         const timestamp = Date.now();
         const filename = `mobiseko-${timestamp}.jpg`; 
-
+        
+        // --- CRITICAL FIX APPLIED HERE ---
         const media = await blogger.media.insert({
             blogId: BLOG_ID,
-            requestBody: { title: `Image for ${title}`, fileName: filename },
-            media: { mimeType: mimeType, data: base64Image }
+            // requestBody holds metadata
+            requestBody: { 
+                title: `Image for ${title}`, 
+                fileName: filename,
+                mimeType: mimeType 
+            },
+            // media object holds the file data (as a Buffer/Stream)
+            media: {
+                body: imageBuffer,
+                mimeType: mimeType,
+            }
         });
+        // --- FIX ENDS ---
         
         log('✅ Image uploaded to Blogger successfully (for thumbnail)');
         return media.data.url;
     } catch (err) {
-        log('❌ CRITICAL ERROR: Image upload failed. CHECK REFRESH_TOKEN/SCOPES.', err.message);
+        log('❌ CRITICAL ERROR: Image upload failed. Token/Scope is likely OK, but check Blogger API Client configuration or file size limits.', err.message);
         return null; 
     }
 }
@@ -251,11 +262,11 @@ FINAL VERIFICATION: Ensure the entire output is valid JSON and strictly adheres 
                 .trim();
         }
         
-        log('Article and Metadata generated successfully');
+        log('✅ Article and Metadata generated successfully');
         return result;
 
     } catch (e) {
-        log('OpenAI Generation error:', e.message);
+        log('❌ OpenAI Generation error:', e.message);
         return null;
     }
 }
@@ -264,7 +275,7 @@ FINAL VERIFICATION: Ensure the entire output is valid JSON and strictly adheres 
 async function processOnce() {
   try {
     const feed = await parser.parseURL(GSMARENA_RSS);
-    if (!feed?.items?.length) return log('No feed items found.');
+    if (!feed?.items?.length) return log('❌ No feed items found.');
 
     const itemsToProcess = feed.items.filter(item => {
       const guid = item.guid || item.link;
@@ -273,14 +284,14 @@ async function processOnce() {
       return !hasBeenPosted(guid, item.link, title); 
     }).slice(0, MAX_ITEMS_PER_RUN);
     
-    if (itemsToProcess.length === 0) return log('No new items to post.');
+    if (itemsToProcess.length === 0) return log('⏱️ No new items to post.');
 
     for (const item of itemsToProcess) {
       const guid = item.guid || item.link;
       const link = item.link;
       const title = item.title;
       
-      log(`🔍 Processing: "${title}"`);
+      log(`\n🔍 Processing new item: "${title}"`);
       PROCESSED_CACHE.add(guid); 
 
       const snippet = item.contentSnippet || '';
@@ -298,9 +309,15 @@ async function processOnce() {
       let finalImageUrl = null;
       
       if (unsplashImageUrl) {
-          // Step 2: Try to upload to Blogger for thumbnail (Blogger API token required)
+          // Step 2: Try to upload to Blogger for thumbnail (CRITICAL FIX applied here)
           const uploadedUrl = await uploadExternalImageToBlogger(unsplashImageUrl, articleData.title);
-          finalImageUrl = uploadedUrl || unsplashImageUrl; // Fallback to direct Unsplash URL
+          
+          // Fallback logic: If Blogger upload fails, use the direct Unsplash URL.
+          finalImageUrl = uploadedUrl || unsplashImageUrl; 
+          
+          if (!uploadedUrl) {
+               log('⚠️ Using direct Unsplash URL (Blogger upload failed).');
+          }
       } else {
           log('⚠️ Proceeding without image. Unsplash search failed.');
       }
@@ -342,36 +359,40 @@ async function processOnce() {
         }
       });
 
-      log('✅ Posted:', res.data.url);
-      log('🏷️ Tags used:', finalLabels.join(', '));
+      log('✅ Post published successfully!');
+      log('🌐 Post URL:', res.data.url);
+      log('🏷️ Final Tags:', finalLabels.join(', '));
       markPosted({ guid, link, title, published_at: item.pubDate });
       
       if (MODE === 'once') return;
       await sleep(2000);
     }
   } catch (err) {
-    log('processOnce error:', err.message);
+    log('🔴 FATAL PROCESS ERROR:', err.message);
   }
 }
 
 // ========== START EXECUTION ==========
 async function start() {
-  log(`🚀 Starting ${BLOG_BRAND_NAME} AutoPoster (Final Stable Build) in ${MODE} mode...`);
+  log(`\n🚀 Starting ${BLOG_BRAND_NAME} AutoPoster (Final Stable Build) in ${MODE} mode...`);
   
   if (!fs.existsSync(DB_PATH)) {
       log('⚠️ New Database will be created.');
   } else {
-       log('⚠️ Existing DB found. If you see duplicates, run: rm -f ./data/posts.db');
+       // Only logging warning, not providing rm -f command.
+       log('⚠️ Existing DB found. (Duplicate checks are active.)'); 
   }
 
   if (MODE === 'once') {
     await processOnce();
+    log('\n🏁 Script finished (Mode: once).');
     process.exit(0);
   } else {
+    // Run immediately and then schedule the cron
     await processOnce();
     cron.schedule(POST_INTERVAL_CRON, processOnce);
     log(`⏰ Cron scheduled: Running at ${POST_INTERVAL_CRON}`);
   }
 }
 
-start().catch(e => log('Fatal error:', e.message));
+start().catch(e => log('🔴 Fatal startup error:', e.message));
